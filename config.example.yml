@@ -1,0 +1,43 @@
+# Telegram 配置
+telegram:
+  token: "your-bot-token"
+  owners: ["your-telegram-id"]  # 超级管理员ID（可管理广告）
+  allow_any_group: true
+  groups: []
+
+# AI 模型选择: openai / qwen / deepseek
+ai_model: "deepseek"
+
+# OpenAI 配置
+openai:
+  api_key: ""
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+
+# 通义千问配置
+qwen:
+  api_key: ""
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen-vl-max"
+
+# DeepSeek 配置
+deepseek:
+  api_key: ""
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+
+# 检测策略（增强版 - 移植自 Go 版本）
+strategy:
+  joined_days: 3              # 加入天数阈值
+  min_messages: 3             # 最少发言次数
+  spam_score: 80              # 垃圾评分阈值 (0-100)
+  verification_times: 1       # 验证通过次数限制（0=不限制，>0=通过N次后不再检测）
+  check_message_count: true   # 是否检查发言次数（false=只看加入天数）
+
+# 消息模板
+message:
+  block_hint: "🚫 检测到违规内容\n\n用户：[{name}](tg://user?id={user_id})\n风险评分：{score} 分\n\n📋 违规原因：\n```\n{reason}\n```\n\n🤖 AI 嘲讽：\n```\n{mock}\n```\n\n⚠️ 该用户已被永久封禁"
+
+# 数据库
+database:
+  path: "data/bot.db"

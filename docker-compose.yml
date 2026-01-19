@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: telegram-anti-spam-bot
+    restart: unless-stopped
+    volumes:
+      - ./config.yml:/app/config.yml
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      - TELEGRAM_API_URL=https://tg.api.riyu.cc
