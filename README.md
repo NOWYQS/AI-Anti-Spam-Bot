@@ -41,6 +41,10 @@
 - 📢 **Ad Buttons**: Custom advertisement buttons on ban notifications
 - ⚡ **High Performance**: Async processing, non-blocking
 - 🔄 **Verification System**: Verified users skip future checks, saving API calls
+- 🔁 **Auto Retry**: AI API calls auto-retry on failure (3 times, exponential backoff)
+- 📝 **Persistent Logs**: Runtime logs saved to `data/bot.log`
+- 📈 **Statistics**: `/stats` command to view detection statistics
+- 🌍 **Multi-Language**: Support for Chinese/English
 
 ## 🚀 Quick Start
 
@@ -94,6 +98,7 @@ python bot.py
 - `/add_ad title|link|expiry|weight` - Add ad button
 - `/all_ad` - View all ads
 - `/del_ad <ID>` - Delete ad
+- `/stats` - View runtime statistics (detection count, ban rate, etc.)
 
 **Ad Button Example:**
 ```
@@ -111,6 +116,9 @@ telegram:
   owners: ["your-telegram-id"]  # Super admins
   allow_any_group: true          # Allow any group
   groups: []                     # Whitelist groups (when allow_any_group=false)
+
+# Language setting
+language: "zh"  # Options: zh / en
 ```
 
 ### AI Model Selection

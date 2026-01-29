@@ -26,6 +26,7 @@ from database import db, UserInfo, Advertisement
 from ai import create_ai_client
 from ai.prompts import USER_INFO_TEMPLATE
 from developer_info import get_start_message
+from i18n import t, set_locale
 
 # 确保日志目录存在
 os.makedirs('data', exist_ok=True)
@@ -70,7 +71,7 @@ class Stats:
 
 stats = Stats()
 
-# 项目信息（请勿移除，这是对开源作者的尊重）
+# 项目信息（请勿移除）
 PROJECT_INFO = {
     'name': 'AI Anti-Spam Bot',
     'repo': 'https://github.com/luoyanglang/AI-Anti-Spam-Bot',
@@ -196,12 +197,12 @@ async def send_ban_notice(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user
     
     # 创建按钮：解封 + 官方频道 + 广告
     buttons = []
-    buttons.append([InlineKeyboardButton("👮🏻 解封", callback_data=f"unban_{user.id}")])
+    buttons.append([InlineKeyboardButton(t('btn_unban'), callback_data=f"unban_{user.id}")])
     
     # 添加官方频道按钮（品牌曝光）
     buttons.append([
-        InlineKeyboardButton("📢 官方频道", url=PROJECT_INFO['channel']),
-        InlineKeyboardButton("💬 交流群组", url=PROJECT_INFO['group'])
+        InlineKeyboardButton(t('btn_channel'), url=PROJECT_INFO['channel']),
+        InlineKeyboardButton(t('btn_group'), url=PROJECT_INFO['group'])
     ])
     
     # 添加自定义广告按钮
@@ -396,16 +397,8 @@ async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAUL
     
     # Bot 被添加到群组（从非成员变为成员）
     if old_status in [ChatMember.LEFT, ChatMember.BANNED] and new_status == ChatMember.MEMBER:
-        welcome_msg = (
-            "👋 你好！我已加入群组\n\n"
-            "🛡️ 我是由狼哥 @luoyanglang 开发的 AI 反垃圾广告机器人，可以自动识别、删除并封禁发送垃圾广告的用户\n\n"
-            "⚠️ 请先将我设为管理员\n"
-            "需要的权限：\n"
-            "• 删除消息\n"
-            "• 封禁用户\n\n"
-            "✅ 设置完成后，我将自动开始保护群组\n\n"
-            "💡 管理员可使用 /admin 查看管理面板\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+        welcome_msg = t('welcome_message') + (
+            f"\n━━━━━━━━━━━━━━━━━━━━\n"
             f"📦 官方项目：{PROJECT_INFO['repo']}\n"
             f"💬 交流群组：{PROJECT_INFO['group']}"
         )
@@ -429,11 +422,8 @@ async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAUL
     
     # Bot 被提升为管理员
     elif old_status == ChatMember.MEMBER and new_status == ChatMember.ADMINISTRATOR:
-        admin_msg = (
-            "✅ 已成为管理员！\n\n"
-            "🛡️ 我现在开始保护群组，自动识别并封禁发送垃圾广告的用户\n\n"
-            "💡 管理员可使用 /admin 查看管理面板\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+        admin_msg = t('admin_promoted') + (
+            f"\n━━━━━━━━━━━━━━━━━━━━\n"
             f"📦 官方项目：{PROJECT_INFO['repo']}\n"
             f"📢 官方频道：{PROJECT_INFO['channel']}\n"
             f"💬 交流群组：{PROJECT_INFO['group']}"
@@ -474,26 +464,18 @@ async def cmd_add_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_owner(user_id):
-        await update.message.reply_text("⚠️ 仅超级管理员可用")
+        await update.message.reply_text(t('owner_only'))
         return
     
     if not context.args:
-        await update.message.reply_text(
-            "📝 添加广告按钮\n\n"
-            "格式: /add_ad 标题|链接|过期时间|权重\n\n"
-            "示例:\n"
-            "/add_ad 官方频道|https://t.me/channel|2099-01-01 00:00:00|100\n\n"
-            "说明:\n"
-            "• 权重越大越靠前\n"
-            "• 过期时间格式: YYYY-MM-DD HH:MM:SS"
-        )
+        await update.message.reply_text(t('ad_add_usage'))
         return
     
     try:
         payload = " ".join(context.args)
         parts = payload.split("|")
         if len(parts) != 4:
-            await update.message.reply_text("❌ 格式错误，需要4个参数")
+            await update.message.reply_text(t('ad_add_error_format'))
             return
         
         title, url, validity_str, sort_str = parts
@@ -508,37 +490,38 @@ async def cmd_add_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         ad_id = db.add_advertisement(ad)
-        await update.message.reply_text(f"✅ 广告添加成功！ID: {ad_id}")
+        await update.message.reply_text(t('ad_add_success', id=ad_id))
         
         # 显示所有广告
         await cmd_all_ad(update, context)
     except Exception as e:
-        await update.message.reply_text(f"❌ 添加失败: {str(e)}")
+        await update.message.reply_text(t('ad_add_failed', error=str(e)))
 
 async def cmd_all_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """查看所有广告"""
     user_id = update.effective_user.id
     
     if not is_owner(user_id):
-        await update.message.reply_text("⚠️ 仅超级管理员可用")
+        await update.message.reply_text(t('owner_only'))
         return
     
     ads = db.get_all_advertisements()
     if not ads:
-        await update.message.reply_text("📭 暂无广告")
+        await update.message.reply_text(t('ad_list_empty'))
         return
     
-    msg = "📋 所有广告：\n\n"
+    msg = t('ad_list_header')
     for ad in ads:
-        validity_str = ad.validity_period.strftime("%Y-%m-%d %H:%M") if ad.validity_period else "永久"
-        created_str = ad.created_at.strftime("%Y-%m-%d %H:%M") if ad.created_at else "未知"
-        msg += f"ID: {ad.id}\n"
-        msg += f"标题: {ad.title}\n"
-        msg += f"链接: {ad.url}\n"
-        msg += f"权重: {ad.sort}\n"
-        msg += f"过期: {validity_str}\n"
-        msg += f"创建: {created_str}\n"
-        msg += "---\n"
+        validity_str = ad.validity_period.strftime("%Y-%m-%d %H:%M") if ad.validity_period else t('validity_permanent')
+        created_str = ad.created_at.strftime("%Y-%m-%d %H:%M") if ad.created_at else t('validity_unknown')
+        msg += t('ad_list_item',
+            id=ad.id,
+            title=ad.title,
+            url=ad.url,
+            sort=ad.sort,
+            validity=validity_str,
+            created=created_str
+        )
     
     await update.message.reply_text(msg)
 
@@ -550,20 +533,20 @@ async def cmd_del_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_owner(user_id):
-        await update.message.reply_text("⚠️ 仅超级管理员可用")
+        await update.message.reply_text(t('owner_only'))
         return
     
     if not context.args or len(context.args) != 1:
-        await update.message.reply_text("格式: /del_ad <广告ID>")
+        await update.message.reply_text(t('ad_delete_usage'))
         return
     
     try:
         ad_id = int(context.args[0])
         db.delete_advertisement(ad_id)
-        await update.message.reply_text(f"✅ 广告 {ad_id} 已删除")
+        await update.message.reply_text(t('ad_delete_success', id=ad_id))
         await cmd_all_ad(update, context)
     except Exception as e:
-        await update.message.reply_text(f"❌ 删除失败: {str(e)}")
+        await update.message.reply_text(t('ad_delete_failed', error=str(e)))
 
 # ============ 其他管理命令 ============
 
@@ -578,35 +561,26 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.effective_chat.type == "private":
         if not is_owner(user_id):
-            await update.message.reply_text("⚠️ 无权限")
+            await update.message.reply_text(t('no_permission'))
             return
     else:
         if not await is_chat_admin(chat_id, user_id, context):
-            await update.message.reply_text("⚠️ 仅群管理员可用")
+            await update.message.reply_text(t('admin_only'))
             return
 
     model = config.get("ai_model", "unknown")
     score = config.get("strategy.spam_score", 80)
     
-    msg = (
-        f"⚙️ 管理面板\n\n"
-        f"🤖 当前模型: {model}\n"
-        f"📊 封禁阈值: {score}分\n"
-        f"📅 检测天数: {config.get('strategy.joined_days', 3)}天\n"
-        f"💬 最少发言: {config.get('strategy.min_messages', 3)}条\n"
-        f"✅ 验证次数限制: {config.get('strategy.verification_times', 0)}\n\n"
-        f"💡 管理命令：\n"
-        f"• /unban <用户ID> - 解禁用户\n"
+    msg = t('admin_panel',
+        model=model,
+        score=score,
+        days=config.get('strategy.joined_days', 3),
+        messages=config.get('strategy.min_messages', 3),
+        verification=config.get('strategy.verification_times', 0)
     )
     
     if is_owner(user_id):
-        msg += (
-            f"\n🎯 超级管理员命令：\n"
-            f"• /add_ad - 添加广告按钮\n"
-            f"• /all_ad - 查看所有广告\n"
-            f"• /del_ad <ID> - 删除广告\n"
-            f"• /stats - 查看运行统计"
-        )
+        msg += t('admin_panel_owner')
     
     await update.message.reply_text(msg)
 
@@ -615,25 +589,25 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_owner(user_id):
-        await update.message.reply_text("⚠️ 仅超级管理员可用")
+        await update.message.reply_text(t('owner_only'))
         return
     
     s = stats.get_stats()
     uptime_hours = s['uptime_seconds'] // 3600
     uptime_mins = (s['uptime_seconds'] % 3600) // 60
     
-    msg = (
-        f"📊 运行统计\n\n"
-        f"⏱️ 运行时长: {uptime_hours}小时 {uptime_mins}分钟\n"
-        f"🔍 总检测次数: {s['checks_total']}\n"
-        f"✅ 通过: {s['checks_passed']}\n"
-        f"🚫 封禁: {s['checks_banned']}\n"
-        f"❌ 失败: {s['checks_failed']}\n"
+    msg = t('stats_panel',
+        hours=uptime_hours,
+        minutes=uptime_mins,
+        total=s['checks_total'],
+        passed=s['checks_passed'],
+        banned=s['checks_banned'],
+        failed=s['checks_failed']
     )
     
     if s['checks_total'] > 0:
         ban_rate = (s['checks_banned'] / s['checks_total']) * 100
-        msg += f"\n📈 封禁率: {ban_rate:.1f}%"
+        msg += t('stats_ban_rate', rate=f"{ban_rate:.1f}")
     
     await update.message.reply_text(msg)
 
@@ -648,7 +622,7 @@ async def handle_unban_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = query.message.chat_id
     
     if not await is_chat_admin(chat_id, user_id, context):
-        await query.answer("⚠️ 仅群管理员可用", show_alert=True)
+        await query.answer(t('admin_only'), show_alert=True)
         return
     
     callback_data = query.data
@@ -685,15 +659,15 @@ async def handle_unban_button(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning(f"删除封禁消息失败: {e}")
         
         # 发送解禁通知（Go 版本的功能）
-        admin_name = query.from_user.first_name or "管理员"
-        notice = f"✅ 管理员 {admin_name} 已解封用户 [{target_user_id}](tg://user?id={target_user_id})"
+        admin_name = query.from_user.first_name or "Admin"
+        notice = t('unban_notice', admin=admin_name, user_id=target_user_id)
         await context.bot.send_message(chat_id, notice, parse_mode="Markdown")
         
-        await query.answer("✅ 解除禁言成功", show_alert=False)
+        await query.answer(t('unban_success'), show_alert=False)
         
         logger.info(f"Unmuted user {target_user_id} in chat {chat_id} by admin {user_id} via button")
     except Exception as e:
-        await query.answer(f"❌ 解除禁言失败：{str(e)}", show_alert=True)
+        await query.answer(t('unban_failed', error=str(e)), show_alert=True)
         logger.error(f"Failed to unmute user {target_user_id}: {e}")
 
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -704,11 +678,11 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     if update.effective_chat.type == "private":
-        await update.message.reply_text("⚠️ 此命令只能在群组中使用")
+        await update.message.reply_text(t('group_only'))
         return
     
     if not await is_chat_admin(chat_id, user_id, context):
-        await update.message.reply_text("⚠️ 仅群管理员可用")
+        await update.message.reply_text(t('admin_only'))
         return
     
     target_user_id = None
@@ -721,13 +695,10 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             target_user_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("❌ 无效的用户ID")
+            await update.message.reply_text(t('unban_invalid_id'))
             return
     else:
-        await update.message.reply_text(
-            "⚠️ 请回复被禁言用户的消息\n\n"
-            "或使用：/unban <用户ID>"
-        )
+        await update.message.reply_text(t('unban_usage'))
         return
     
     try:
@@ -752,20 +723,13 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if target_user_name:
-            await update.message.reply_text(
-                f"✅ 已解除禁言\n\n"
-                f"用户：{target_user_name}\n"
-                f"ID：{target_user_id}"
-            )
+            await update.message.reply_text(t('unban_success_detail', name=target_user_name, user_id=target_user_id))
         else:
-            await update.message.reply_text(
-                f"✅ 已解除禁言\n\n"
-                f"用户ID：{target_user_id}"
-            )
+            await update.message.reply_text(t('unban_success_id', user_id=target_user_id))
         
         logger.info(f"Unmuted user {target_user_id} in chat {chat_id} by admin {user_id}")
     except Exception as e:
-        await update.message.reply_text(f"❌ 解除禁言失败：{str(e)}")
+        await update.message.reply_text(t('unban_failed', error=str(e)))
         logger.error(f"Failed to unmute user {target_user_id}: {e}")
 
 # ============ 启动 ============
@@ -808,6 +772,10 @@ def validate_config():
     logger.info("✅ 配置验证通过")
 
 def main():
+    # 初始化语言设置
+    language = config.get("language", "zh")
+    set_locale(language)
+    
     # 显示项目信息
     logger.info("=" * 60)
     logger.info(f"🤖 {PROJECT_INFO['name']} - 官方版本")
