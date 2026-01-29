@@ -14,6 +14,7 @@ AI 反垃圾广告机器人 (AI Anti-Spam Bot)
 import base64
 import logging
 import sys
+import os
 from datetime import datetime
 from telegram import Update, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -26,11 +27,48 @@ from ai import create_ai_client
 from ai.prompts import USER_INFO_TEMPLATE
 from developer_info import get_start_message
 
+# 确保日志目录存在
+os.makedirs('data', exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('data/bot.log', encoding='utf-8')
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# 运行时统计（简单的内存统计）
+class Stats:
+    def __init__(self):
+        self.checks_total = 0
+        self.checks_passed = 0
+        self.checks_banned = 0
+        self.checks_failed = 0
+        self.start_time = datetime.now()
+    
+    def record_check(self, result: str):
+        self.checks_total += 1
+        if result == 'passed':
+            self.checks_passed += 1
+        elif result == 'banned':
+            self.checks_banned += 1
+        elif result == 'failed':
+            self.checks_failed += 1
+    
+    def get_stats(self) -> dict:
+        uptime = datetime.now() - self.start_time
+        return {
+            'uptime_seconds': int(uptime.total_seconds()),
+            'checks_total': self.checks_total,
+            'checks_passed': self.checks_passed,
+            'checks_banned': self.checks_banned,
+            'checks_failed': self.checks_failed
+        }
+
+stats = Stats()
 
 # 项目信息（请勿移除，这是对开源作者的尊重）
 PROJECT_INFO = {
@@ -96,17 +134,21 @@ def process_nickname(nickname: str) -> str:
     处理用户名，用 spoiler 隐藏中间部分
     和 Go 版本一致：使用 || 包裹中间部分
     """
-    if not nickname:
+    if not nickname or not nickname.strip():
         return "未知用户"
     
-    length = len(nickname)
+    nickname = nickname.strip()
+    # 先转义 MarkdownV2 特殊字符（spoiler 的 || 除外）
+    escaped = escape_markdown_v2(nickname)
+    
+    length = len(escaped)
     if length == 1:
-        return f"||{nickname}||"
+        return f"||{escaped}||"
     elif length == 2:
-        return f"{nickname[0]}||{nickname[1]}||"
+        return f"{escaped[0]}||{escaped[1]}||"
     else:
         # 保留首尾，中间用 spoiler 隐藏
-        return f"{nickname[0]}||{nickname[1:-1]}||{nickname[-1]}"
+        return f"{escaped[0]}||{escaped[1:-1]}||{escaped[-1]}"
 
 def escape_markdown_v2(text: str) -> str:
     """转义 MarkdownV2 特殊字符"""
@@ -238,12 +280,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if result.is_spam and result.score >= score_threshold:
             # 是垃圾广告，封禁
             await ban_user_and_notify(context, chat_id, user, message, result)
+            stats.record_check('banned')
         else:
             # 不是垃圾广告，增加验证通过次数
             db.increment_verification_times(user.id, chat_id)
+            stats.record_check('passed')
             logger.info(f"User {user.id} passed check, verification_times increased")
     except Exception as e:
         logger.error(f"❌ AI 检测失败 (用户 {user.id}): {e}", exc_info=True)
+        stats.record_check('failed')
         # 失败时不封禁，避免误伤
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -284,10 +329,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         score_threshold = config.get("strategy.spam_score", 80)
         if result.is_spam and result.score >= score_threshold:
             await ban_user_and_notify(context, chat_id, user, message, result)
+            stats.record_check('banned')
         else:
             db.increment_verification_times(user.id, chat_id)
+            stats.record_check('passed')
     except Exception as e:
         logger.error(f"❌ 图片检测失败 (用户 {user.id}): {e}", exc_info=True)
+        stats.record_check('failed')
         # 失败时不封禁，避免误伤
 
 async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -327,10 +375,13 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         score_threshold = config.get("strategy.spam_score", 80)
         if result.is_spam and result.score >= score_threshold:
             await ban_user_and_notify(context, chat_id, user, message, result)
+            stats.record_check('banned')
         else:
             db.increment_verification_times(user.id, chat_id)
+            stats.record_check('passed')
     except Exception as e:
         logger.error(f"❌ 贴纸检测失败 (用户 {user.id}): {e}", exc_info=True)
+        stats.record_check('failed')
         # 失败时不封禁，避免误伤
 
 
@@ -338,8 +389,6 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 Bot 被添加到群组"""
-    import asyncio
-    
     chat_member = update.my_chat_member
     new_status = chat_member.new_chat_member.status
     old_status = chat_member.old_chat_member.status
@@ -365,17 +414,15 @@ async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAUL
             sent_message = await context.bot.send_message(chat.id, welcome_msg)
             logger.info(f"Bot added to group {chat.id} ({chat.title}), welcome message will be deleted in 30s")
             
-            # 使用 asyncio 延迟删除消息
-            async def delete_after_delay():
-                await asyncio.sleep(30)
+            # 使用 job_queue 延迟删除消息（比 asyncio.create_task 更可靠）
+            async def delete_welcome_message(ctx: ContextTypes.DEFAULT_TYPE):
                 try:
-                    await context.bot.delete_message(chat.id, sent_message.message_id)
+                    await ctx.bot.delete_message(chat.id, sent_message.message_id)
                     logger.info(f"Deleted welcome message in group {chat.id}")
                 except Exception as e:
-                    logger.error(f"Failed to delete welcome message in {chat.id}: {e}")
+                    logger.warning(f"Failed to delete welcome message in {chat.id}: {e}")
             
-            # 在后台运行删除任务
-            asyncio.create_task(delete_after_delay())
+            context.application.job_queue.run_once(delete_welcome_message, 30)
             
         except Exception as e:
             logger.error(f"Failed to send welcome message to {chat.id}: {e}")
@@ -557,8 +604,36 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"\n🎯 超级管理员命令：\n"
             f"• /add_ad - 添加广告按钮\n"
             f"• /all_ad - 查看所有广告\n"
-            f"• /del_ad <ID> - 删除广告"
+            f"• /del_ad <ID> - 删除广告\n"
+            f"• /stats - 查看运行统计"
         )
+    
+    await update.message.reply_text(msg)
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看运行统计（仅超级管理员）"""
+    user_id = update.effective_user.id
+    
+    if not is_owner(user_id):
+        await update.message.reply_text("⚠️ 仅超级管理员可用")
+        return
+    
+    s = stats.get_stats()
+    uptime_hours = s['uptime_seconds'] // 3600
+    uptime_mins = (s['uptime_seconds'] % 3600) // 60
+    
+    msg = (
+        f"📊 运行统计\n\n"
+        f"⏱️ 运行时长: {uptime_hours}小时 {uptime_mins}分钟\n"
+        f"🔍 总检测次数: {s['checks_total']}\n"
+        f"✅ 通过: {s['checks_passed']}\n"
+        f"🚫 封禁: {s['checks_banned']}\n"
+        f"❌ 失败: {s['checks_failed']}\n"
+    )
+    
+    if s['checks_total'] > 0:
+        ban_rate = (s['checks_banned'] / s['checks_total']) * 100
+        msg += f"\n📈 封禁率: {ban_rate:.1f}%"
     
     await update.message.reply_text(msg)
 
@@ -772,6 +847,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("unban", cmd_unban))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     
     # 广告管理命令
     app.add_handler(CommandHandler("add_ad", cmd_add_ad))
