@@ -128,22 +128,19 @@ jobs:
           issues_url = f"https://github.com/{repo}/issues"
           repo_url = f"https://github.com/{repo}"
 
-          message = f"""<b>🎉 AI-Anti-Spam-Bot 发布新版本</b>
-
-<b>🏷 版本：</b><code>{version}</code>
-#AI反垃圾机器人版本发布
-
-<b>📦 Docker：</b>
-<code>docker pull {dockerhub_username}/{docker_image_name}:{version}</code>
-
-<b>🔍 更新详情：</b>
-<a href="{release_url}">查看 Release</a>
-
-<b>🐞 问题反馈：</b>
-<a href="{issues_url}">提交 Issue</a>
-
-<b>📦 项目地址：</b>
-<a href="{repo_url}">GitHub 仓库</a>"""
+          message = (
+              f"<b>\U0001f389 AI-Anti-Spam-Bot \u53d1\u5e03\u65b0\u7248\u672c</b>\n\n"
+              f"<b>\U0001f3f7 \u7248\u672c\uff1a</b><code>{version}</code>\n"
+              "#AI\u53cd\u5783\u573e\u673a\u5668\u4eba\u7248\u672c\u53d1\u5e03\n\n"
+              f"<b>\U0001f4e6 Docker\uff1a</b>\n"
+              f"<code>docker pull {dockerhub_username}/{docker_image_name}:{version}</code>\n\n"
+              f"<b>\U0001f50d \u66f4\u65b0\u8be6\u60c5\uff1a</b>\n"
+              f"<a href=\"{release_url}\">\u67e5\u770b Release</a>\n\n"
+              f"<b>\U0001f41e \u95ee\u9898\u53cd\u9988\uff1a</b>\n"
+              f"<a href=\"{issues_url}\">\u63d0\u4ea4 Issue</a>\n\n"
+              f"<b>\U0001f4e6 \u9879\u76ee\u5730\u5740\uff1a</b>\n"
+              f"<a href=\"{repo_url}\">GitHub \u4ed3\u5e93</a>"
+          )
 
           payload = urllib.parse.urlencode(
               {
