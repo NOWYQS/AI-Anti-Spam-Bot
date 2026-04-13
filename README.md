@@ -35,6 +35,8 @@
 ## ✨ Features
 
 - 🛡️ **Smart Detection**: AI-powered spam detection for text, images, and stickers
+- 📝 **Visible-Content Checks**: Image captions and quoted snippets are included in moderation
+- 🔁 **Reply & Forward Coverage**: Reply content and forwarded visible content are included in extraction
 - 🎯 **Multi-Model Support**: Choose from OpenAI, Qwen, or DeepSeek
 - 📊 **Flexible Strategy**: Configurable detection days, message count, verification times
 - 🔓 **User-Friendly Management**: One-click unban, admin panel
@@ -43,6 +45,7 @@
 - 🔄 **Verification System**: Verified users skip future checks, saving API calls
 - 🔁 **Auto Retry**: AI API calls auto-retry on failure (3 times, exponential backoff)
 - 📝 **Persistent Logs**: Runtime logs saved to `data/bot.log`
+- 🧹 **Auto Cleanup**: Ban notices and welcome messages can auto-delete after a configurable delay
 - 📈 **Statistics**: `/stats` command to view detection statistics
 - 🌍 **Multi-Language**: Support for Chinese/English
 
@@ -146,6 +149,60 @@ strategy:
   check_message_count: true   # Check message count
 ```
 
+### Message Cleanup
+
+```yaml
+message:
+  ban_notice_template: |
+    \#BanAlert
+    [{masked_name}]({user_link}) Warning: Your username or message violates the rules
+    ⚠️ Identified as high-risk user by AI, permanently banned
+    Risk score: {score}
+    📋 Reason:
+    ```
+    {reason}
+    ```
+    🤖 AI roast:
+    ```
+    {mock}
+    ```
+  delete_ban_notice_after_seconds: 30
+  delete_welcome_message_after_seconds: 30
+```
+
+Set either value to `0` to disable auto deletion.
+
+Supported `ban_notice_template` variables:
+
+- `{masked_name}`
+- `{user_link}`
+- `{score}`
+- `{reason}`
+- `{mock}`
+- `{user_id}`
+- `{chat_id}`
+- `{channel_url}`
+- `{group_url}`
+
+Unknown placeholders will fall back to the default template instead of breaking moderation.
+
+## 🧪 Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The first test baseline covers ban-notice template rendering, MarkdownV2 safety, and recent moderation regressions.
+
+Current visible-content extraction covers:
+
+- Text messages
+- Photo/media captions
+- Quoted snippets
+- Replied message text/caption
+- Forwarded visible text/caption
+
 **Strategy Explanation:**
 
 1. **joined_days**: Users who joined more than N days ago skip detection
@@ -224,12 +281,16 @@ docker compose logs -f
 ## 📊 How It Works
 
 ```
-User sends message
+User sends text / photo / sticker
     ↓
 Check if admin → Yes → Allow
     ↓ No
 Check if needs detection → No → Allow
     ↓ Yes
+Extract visible content
+    ↓
+Photo message with caption / quote → Text pre-check first
+    ↓
 AI analyzes content
     ↓
 Score < threshold → Allow + verification count +1
