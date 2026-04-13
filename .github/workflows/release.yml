@@ -132,6 +132,7 @@ jobs:
           message = f"""<b>🎉 AI-Anti-Spam-Bot 发布新版本</b>
 
 <b>🏷 版本：</b><code>{version}</code>
+#AI反垃圾机器人版本发布
 
 <b>📦 Docker：</b>
 <code>docker pull {dockerhub_username}/{docker_image_name}:{version}</code>
