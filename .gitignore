@@ -13,6 +13,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
 
 # 保护：不排除 developer_info 的字节码（需要提交）
 !__pycache__/developer_info.*.pyc
