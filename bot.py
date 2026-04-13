@@ -11,6 +11,7 @@ AI 反垃圾广告机器人 (AI Anti-Spam Bot)
 
 如果本项目对您有帮助，请保留开发者信息，这是对开源作者最基本的尊重 🙏
 """
+import asyncio
 import base64
 import logging
 import sys
@@ -22,11 +23,26 @@ from telegram.ext import (
     ChatMemberHandler, ContextTypes, filters, CallbackQueryHandler
 )
 from config import config
-from database import db, UserInfo, Advertisement
+from database import db, UserInfo
 from ai import create_ai_client
 from ai.prompts import USER_INFO_TEMPLATE
 from developer_info import get_start_message
 from i18n import t, set_locale
+from message_utils import (
+    build_ban_notice,
+    extract_message_text,
+    process_nickname,
+)
+from handler_logic import evaluate_photo_moderation
+from moderation_logic import RuntimeStats, should_check_user
+from command_logic import (
+    CommandInputError,
+    parse_add_ad_payload,
+    parse_delete_ad_args,
+    parse_unban_callback_data,
+    resolve_unban_target,
+)
+from command_views import render_ad_list, render_stats_panel
 
 # 确保日志目录存在
 os.makedirs('data', exist_ok=True)
@@ -41,35 +57,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 运行时统计（简单的内存统计）
-class Stats:
-    def __init__(self):
-        self.checks_total = 0
-        self.checks_passed = 0
-        self.checks_banned = 0
-        self.checks_failed = 0
-        self.start_time = datetime.now()
-    
-    def record_check(self, result: str):
-        self.checks_total += 1
-        if result == 'passed':
-            self.checks_passed += 1
-        elif result == 'banned':
-            self.checks_banned += 1
-        elif result == 'failed':
-            self.checks_failed += 1
-    
-    def get_stats(self) -> dict:
-        uptime = datetime.now() - self.start_time
-        return {
-            'uptime_seconds': int(uptime.total_seconds()),
-            'checks_total': self.checks_total,
-            'checks_passed': self.checks_passed,
-            'checks_banned': self.checks_banned,
-            'checks_failed': self.checks_failed
-        }
-
-stats = Stats()
+stats = RuntimeStats()
 
 # 项目信息（请勿移除）
 PROJECT_INFO = {
@@ -103,25 +91,13 @@ def need_check(user: UserInfo) -> bool:
     判断用户是否需要检测
     支持灵活的检测策略配置
     """
-    # 检查验证次数限制
-    max_verification = config.get("strategy.verification_times", 0)
-    if max_verification > 0 and user.verification_times >= max_verification:
-        return False
-    
-    # 检查加入天数
-    max_days = config.get("strategy.joined_days", 3)
-    joined_days = (datetime.now() - user.join_time).days
-    if joined_days > max_days:
-        return False
-    
-    # 检查发言次数（可选）
-    check_message_count = config.get("strategy.check_message_count", True)
-    if check_message_count:
-        min_msgs = config.get("strategy.min_messages", 3)
-        if user.message_count > min_msgs:
-            return False
-    
-    return True
+    strategy = {
+        "verification_times": config.get("strategy.verification_times", 0),
+        "joined_days": config.get("strategy.joined_days", 3),
+        "check_message_count": config.get("strategy.check_message_count", True),
+        "min_messages": config.get("strategy.min_messages", 3),
+    }
+    return should_check_user(user, strategy)
 
 def build_user_info(user, db_user: UserInfo) -> str:
     """构建用户信息字符串（不包含用户名称，避免因名称误判）"""
@@ -130,33 +106,26 @@ def build_user_info(user, db_user: UserInfo) -> str:
         join_time=db_user.join_time.strftime("%Y-%m-%d %H:%M")
     )
 
-def process_nickname(nickname: str) -> str:
-    """
-    处理用户名，用 spoiler 隐藏中间部分
-    和 Go 版本一致：使用 || 包裹中间部分
-    """
-    if not nickname or not nickname.strip():
-        return "未知用户"
-    
-    nickname = nickname.strip()
-    # 先转义 MarkdownV2 特殊字符（spoiler 的 || 除外）
-    escaped = escape_markdown_v2(nickname)
-    
-    length = len(escaped)
-    if length == 1:
-        return f"||{escaped}||"
-    elif length == 2:
-        return f"{escaped[0]}||{escaped[1]}||"
-    else:
-        # 保留首尾，中间用 spoiler 隐藏
-        return f"{escaped[0]}||{escaped[1:-1]}||{escaped[-1]}"
+def schedule_message_deletion(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    delay_seconds: int,
+    reason: str = "message"
+):
+    """后台延迟删除消息，避免群内长期堆积系统提示"""
+    if delay_seconds <= 0:
+        return
 
-def escape_markdown_v2(text: str) -> str:
-    """转义 MarkdownV2 特殊字符"""
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
+    async def delete_after_delay():
+        await asyncio.sleep(delay_seconds)
+        try:
+            await context.bot.delete_message(chat_id, message_id)
+            logger.info(f"Deleted {reason} in group {chat_id} after {delay_seconds}s")
+        except Exception as e:
+            logger.warning(f"Failed to delete {reason} in {chat_id}: {e}")
+
+    asyncio.create_task(delete_after_delay())
 
 def create_ban_keyboard() -> InlineKeyboardMarkup:
     """
@@ -180,19 +149,19 @@ async def send_ban_notice(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user
     name = f"{user.last_name or ''}{user.first_name or ''}"
     masked_name = process_nickname(name)
     user_link = f"tg://user?id={user.id}"
-    
-    # 转义特殊字符
-    reason_escaped = escape_markdown_v2(result.reason or "无")
-    mock_escaped = escape_markdown_v2(result.mock_text or "无")
-    
-    # 新格式
-    notice = (
-        f"\\#封禁预警\n"
-        f"[{masked_name}]({user_link}) 请注意，你的用户名或发言存在违规\n"
-        f"⚠️已被AI判断为高风险用户，永久封禁\n"
-        f"风险分数：{result.score}\n"
-        f"📋 违规原因：\n```\n{reason_escaped}\n```\n"
-        f"🤖 AI 嘲讽：\n```\n{mock_escaped}\n```"
+
+    notice = build_ban_notice(
+        config.get("message.ban_notice_template"),
+        masked_name=masked_name,
+        user_link=user_link,
+        score=result.score,
+        reason=result.reason,
+        mock_text=result.mock_text,
+        user_id=user.id,
+        chat_id=chat_id,
+        channel_url=PROJECT_INFO["channel"],
+        group_url=PROJECT_INFO["group"],
+        logger=logger,
     )
     
     # 创建按钮：解封 + 官方频道 + 广告
@@ -212,7 +181,15 @@ async def send_ban_notice(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user
     
     reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
     
-    await context.bot.send_message(chat_id, notice, parse_mode="MarkdownV2", reply_markup=reply_markup)
+    sent_message = await context.bot.send_message(
+        chat_id,
+        notice,
+        parse_mode="MarkdownV2",
+        reply_markup=reply_markup
+    )
+
+    delete_after = config.get("message.delete_ban_notice_after_seconds", 30)
+    schedule_message_deletion(context, chat_id, sent_message.message_id, delete_after, "ban notice")
 
 async def ban_user_and_notify(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, message, result):
     """禁言用户并发送通知"""
@@ -274,7 +251,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         user_info = build_user_info(user, db_user)
-        result = await ai_client.check_text(user_info, message.text)
+        message_text = extract_message_text(message) or message.text
+        result = await ai_client.check_text(user_info, message_text)
         
         score_threshold = config.get("strategy.spam_score", 80)
         
@@ -312,7 +290,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             verification_times=0
         )
         db.save_user(db_user)
-    
+
     db.increment_message_count(user.id, chat_id)
 
     if not need_check(db_user):
@@ -325,11 +303,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_base64 = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"
 
         user_info = build_user_info(user, db_user)
-        result = await ai_client.check_image(user_info, image_base64)
-        
         score_threshold = config.get("strategy.spam_score", 80)
-        if result.is_spam and result.score >= score_threshold:
-            await ban_user_and_notify(context, chat_id, user, message, result)
+        message_text = extract_message_text(message)
+        decision = await evaluate_photo_moderation(
+            ai_client=ai_client,
+            user_info=user_info,
+            image_base64=image_base64,
+            score_threshold=score_threshold,
+            message_text=message_text,
+            logger=logger,
+            user_id=user.id,
+        )
+
+        if decision.should_ban:
+            await ban_user_and_notify(context, chat_id, user, message, decision.result)
             stats.record_check('banned')
         else:
             db.increment_verification_times(user.id, chat_id)
@@ -405,17 +392,8 @@ async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAUL
         
         try:
             sent_message = await context.bot.send_message(chat.id, welcome_msg)
-            logger.info(f"Bot added to group {chat.id} ({chat.title}), welcome message will be deleted in 30s")
-            
-            # 使用 job_queue 延迟删除消息（比 asyncio.create_task 更可靠）
-            async def delete_welcome_message(ctx: ContextTypes.DEFAULT_TYPE):
-                try:
-                    await ctx.bot.delete_message(chat.id, sent_message.message_id)
-                    logger.info(f"Deleted welcome message in group {chat.id}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete welcome message in {chat.id}: {e}")
-            
-            context.application.job_queue.run_once(delete_welcome_message, 30)
+            delete_after = config.get("message.delete_welcome_message_after_seconds", 30)
+            schedule_message_deletion(context, chat.id, sent_message.message_id, delete_after, "welcome message")
             
         except Exception as e:
             logger.error(f"Failed to send welcome message to {chat.id}: {e}")
@@ -473,27 +451,17 @@ async def cmd_add_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         payload = " ".join(context.args)
-        parts = payload.split("|")
-        if len(parts) != 4:
-            await update.message.reply_text(t('ad_add_error_format'))
-            return
-        
-        title, url, validity_str, sort_str = parts
-        validity = datetime.strptime(validity_str.strip(), "%Y-%m-%d %H:%M:%S")
-        sort = int(sort_str.strip())
-        
-        ad = Advertisement(
-            title=title.strip(),
-            url=url.strip(),
-            sort=sort,
-            validity_period=validity
-        )
-        
+        ad = parse_add_ad_payload(payload)
         ad_id = db.add_advertisement(ad)
         await update.message.reply_text(t('ad_add_success', id=ad_id))
         
         # 显示所有广告
         await cmd_all_ad(update, context)
+    except CommandInputError as e:
+        if e.code == "format":
+            await update.message.reply_text(t('ad_add_error_format'))
+            return
+        await update.message.reply_text(t('ad_add_failed', error=str(e)))
     except Exception as e:
         await update.message.reply_text(t('ad_add_failed', error=str(e)))
 
@@ -506,24 +474,7 @@ async def cmd_all_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     ads = db.get_all_advertisements()
-    if not ads:
-        await update.message.reply_text(t('ad_list_empty'))
-        return
-    
-    msg = t('ad_list_header')
-    for ad in ads:
-        validity_str = ad.validity_period.strftime("%Y-%m-%d %H:%M") if ad.validity_period else t('validity_permanent')
-        created_str = ad.created_at.strftime("%Y-%m-%d %H:%M") if ad.created_at else t('validity_unknown')
-        msg += t('ad_list_item',
-            id=ad.id,
-            title=ad.title,
-            url=ad.url,
-            sort=ad.sort,
-            validity=validity_str,
-            created=created_str
-        )
-    
-    await update.message.reply_text(msg)
+    await update.message.reply_text(render_ad_list(ads, t))
 
 async def cmd_del_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -541,10 +492,15 @@ async def cmd_del_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        ad_id = int(context.args[0])
+        ad_id = parse_delete_ad_args(context.args)
         db.delete_advertisement(ad_id)
         await update.message.reply_text(t('ad_delete_success', id=ad_id))
         await cmd_all_ad(update, context)
+    except CommandInputError as e:
+        if e.code == "usage":
+            await update.message.reply_text(t('ad_delete_usage'))
+            return
+        await update.message.reply_text(t('ad_delete_failed', error=str(e)))
     except Exception as e:
         await update.message.reply_text(t('ad_delete_failed', error=str(e)))
 
@@ -592,24 +548,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t('owner_only'))
         return
     
-    s = stats.get_stats()
-    uptime_hours = s['uptime_seconds'] // 3600
-    uptime_mins = (s['uptime_seconds'] % 3600) // 60
-    
-    msg = t('stats_panel',
-        hours=uptime_hours,
-        minutes=uptime_mins,
-        total=s['checks_total'],
-        passed=s['checks_passed'],
-        banned=s['checks_banned'],
-        failed=s['checks_failed']
-    )
-    
-    if s['checks_total'] > 0:
-        ban_rate = (s['checks_banned'] / s['checks_total']) * 100
-        msg += t('stats_ban_rate', rate=f"{ban_rate:.1f}")
-    
-    await update.message.reply_text(msg)
+    await update.message.reply_text(render_stats_panel(stats.get_stats(), t))
 
 async def handle_unban_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理解除禁言按钮点击"""
@@ -625,11 +564,9 @@ async def handle_unban_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer(t('admin_only'), show_alert=True)
         return
     
-    callback_data = query.data
-    if not callback_data.startswith("unban_"):
+    target_user_id = parse_unban_callback_data(query.data)
+    if target_user_id is None:
         return
-    
-    target_user_id = int(callback_data.split("_")[1])
     
     try:
         await context.bot.restrict_chat_member(
@@ -685,19 +622,15 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t('admin_only'))
         return
     
-    target_user_id = None
-    target_user_name = None
-    
-    if update.message.reply_to_message:
-        target_user_id = update.message.reply_to_message.from_user.id
-        target_user_name = update.message.reply_to_message.from_user.first_name
-    elif context.args and len(context.args) > 0:
-        try:
-            target_user_id = int(context.args[0])
-        except ValueError:
+    try:
+        target_user_id, target_user_name = resolve_unban_target(
+            update.message.reply_to_message,
+            context.args or [],
+        )
+    except CommandInputError as e:
+        if e.code == "invalid_id":
             await update.message.reply_text(t('unban_invalid_id'))
             return
-    else:
         await update.message.reply_text(t('unban_usage'))
         return
     

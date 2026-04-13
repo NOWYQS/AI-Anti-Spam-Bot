@@ -37,6 +37,24 @@ strategy:
   verification_times: 1       # 验证通过次数限制（0=不限制，>0=通过N次后不再检测）
   check_message_count: true   # 是否检查发言次数（false=只看加入天数）
 
+# 消息管理
+message:
+  ban_notice_template: |
+    \#封禁预警
+    [{masked_name}]({user_link}) 请注意，你的用户名或发言存在违规
+    ⚠️已被AI判断为高风险用户，永久封禁
+    风险分数：{score}
+    📋 违规原因：
+    ```
+    {reason}
+    ```
+    🤖 AI 嘲讽：
+    ```
+    {mock}
+    ```
+  delete_ban_notice_after_seconds: 30      # 封禁通知自动删除秒数，0=不自动删除
+  delete_welcome_message_after_seconds: 30 # 欢迎消息自动删除秒数，0=不自动删除
+
 # 数据库
 database:
   path: "data/bot.db"
