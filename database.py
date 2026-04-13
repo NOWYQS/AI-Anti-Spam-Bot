@@ -9,7 +9,6 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List
 from contextlib import contextmanager
-from config import config
 
 @dataclass
 class UserInfo:
@@ -30,9 +29,18 @@ class Advertisement:
     validity_period: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
+
+def _get_default_db_path() -> Path:
+    from config import config
+
+    return Path(config.get("database.path", "data/bot.db"))
+
 class Database:
-    def __init__(self):
-        db_path = Path(config.get("database.path", "data/bot.db"))
+    def __init__(self, db_path: Optional[str | Path] = None):
+        if db_path is None:
+            db_path = _get_default_db_path()
+        else:
+            db_path = Path(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(db_path)
         self._local = threading.local()
@@ -196,4 +204,7 @@ class Database:
         with self._get_cursor() as cur:
             cur.execute("DELETE FROM advertisements WHERE id=?", (ad_id,))
 
-db = Database()
+try:
+    db = Database()
+except (FileNotFoundError, ModuleNotFoundError):
+    db = None
