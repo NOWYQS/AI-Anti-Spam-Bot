@@ -1,13 +1,22 @@
-version: '3.8'
-
 services:
   bot:
-    build: .
-    container_name: telegram-anti-spam-bot
+    image: ${AI_ANTISPAM_IMAGE:-ai-anti-spam-bot:local}
+    build:
+      context: .
+      labels:
+        org.opencontainers.image.revision: ${SOURCE_REVISION:-unknown}
+        org.opencontainers.image.source: https://github.com/NOWYQS/AI-Anti-Spam-Bot
+    container_name: ai-anti-spam-bot
     restart: unless-stopped
+    env_file:
+      - ${BOT_ENV_FILE:-.env}
     volumes:
-      - ./config.yml:/app/config.yml
+      - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
     environment:
-      - TZ=Asia/Shanghai
-      - TELEGRAM_API_URL=https://tg.api.riyu.cc
+      TZ: Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

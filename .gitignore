@@ -1,4 +1,5 @@
 # 配置文件（包含敏感信息）
+.env
 config.yml
 config_server.yml
 MY_INFO.yml
@@ -20,6 +21,7 @@ __pycache__/
 
 # 虚拟环境
 .Python
+.venv/
 build/
 develop-eggs/
 dist/

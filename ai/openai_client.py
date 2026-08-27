@@ -3,7 +3,12 @@ import logging
 import asyncio
 from openai import AsyncOpenAI
 from .base import BaseAI, SpamResult
-from .prompts import TEXT_PROMPT, IMAGE_PROMPT
+from .prompts import (
+    IMAGE_PROMPT,
+    PROFILE_PROMPT,
+    PROFILE_SYSTEM_PROMPT,
+    TEXT_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,14 @@ class OpenAIClient(BaseAI):
         content = await self._call_with_retry([{"role": "user", "content": prompt}])
         return self._parse_result(content)
 
+    async def check_profile(self, profile_json: str) -> SpamResult:
+        prompt = PROFILE_PROMPT.format(profile_json=profile_json)
+        content = await self._call_with_retry([
+            {"role": "system", "content": PROFILE_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        return self._parse_result(content)
+
     async def check_image(self, user_info: str, image_base64: str) -> SpamResult:
         prompt = IMAGE_PROMPT.format(user_info=user_info)
         content = await self._call_with_retry([{
@@ -69,5 +82,9 @@ class OpenAIClient(BaseAI):
                 mock_text=data.get("spam_mock_text", "")
             )
         except json.JSONDecodeError as e:
-            logger.warning(f"AI 响应 JSON 解析失败: {e}, 原始内容: {content[:200]}")
+            logger.warning(
+                "AI 响应 JSON 解析失败: error_type=%s content_length=%s",
+                type(e).__name__,
+                len(content),
+            )
             return SpamResult(is_spam=False, score=0, reason="解析失败", mock_text="")

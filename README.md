@@ -35,6 +35,7 @@
 ## ✨ Features
 
 - 🛡️ **Smart Detection**: AI-powered spam detection for text, images, and stickers
+- 👤 **New-Member Profile Review**: Watches real join transitions and mutes only profiles with clear advertising evidence; normal users are left untouched
 - 📝 **Visible-Content Checks**: Image captions and quoted snippets are included in moderation
 - 🔁 **Reply & Forward Coverage**: Reply content and forwarded visible content are included in extraction
 - 🎯 **Multi-Model Support**: Choose from OpenAI, Qwen, or DeepSeek

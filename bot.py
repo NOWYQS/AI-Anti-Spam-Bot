@@ -13,6 +13,7 @@ AI 反垃圾广告机器人 (AI Anti-Spam Bot)
 """
 import asyncio
 import base64
+import json
 import logging
 import sys
 import os
@@ -33,8 +34,14 @@ from message_utils import (
     extract_message_text,
     process_nickname,
 )
+from logging_utils import SecretRedactionFilter
 from handler_logic import evaluate_photo_moderation
-from moderation_logic import RuntimeStats, should_check_user
+from moderation_logic import (
+    RuntimeStats,
+    is_new_member_join,
+    should_check_user,
+    should_mute_new_member,
+)
 from command_logic import (
     CommandInputError,
     parse_add_ad_payload,
@@ -47,13 +54,23 @@ from command_views import render_ad_list, render_stats_panel
 # 确保日志目录存在
 os.makedirs('data', exist_ok=True)
 
+log_handlers = [
+    logging.StreamHandler(),
+    logging.FileHandler('data/bot.log', encoding='utf-8'),
+]
+redaction_filter = SecretRedactionFilter([
+    config.get("telegram.token", ""),
+    config.get("openai.api_key", ""),
+    config.get("qwen.api_key", ""),
+    config.get("deepseek.api_key", ""),
+])
+for handler in log_handlers:
+    handler.addFilter(redaction_filter)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('data/bot.log', encoding='utf-8')
-    ]
+    handlers=log_handlers,
 )
 logger = logging.getLogger(__name__)
 
@@ -413,23 +430,134 @@ async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAUL
         except Exception as e:
             logger.error(f"Failed to send admin promotion message to {chat.id}: {e}")
 
-async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理新成员加入"""
-    chat_member = update.chat_member
-    if chat_member.new_chat_member.status == ChatMember.MEMBER:
-        user = chat_member.new_chat_member.user
-        chat_id = chat_member.chat.id
-        
-        db_user = UserInfo(
-            user_id=user.id,
-            chat_id=chat_id,
-            join_time=datetime.now(),
-            message_count=0,
-            check_count=0,
-            verification_times=0
+async def review_new_member(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user,
+):
+    """Review public join metadata and mute only clear profile advertisements."""
+    from telegram import ChatPermissions
+
+    profile_json = json.dumps(
+        {
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "username": user.username or "",
+            "is_bot": bool(user.is_bot),
+            "is_premium": bool(getattr(user, "is_premium", False)),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    try:
+        timeout = config.get("new_member_review.timeout_seconds", 20)
+        result = await asyncio.wait_for(
+            ai_client.check_profile(profile_json),
+            timeout=timeout,
         )
-        db.save_user(db_user)
-        logger.info(f"New member {user.id} joined chat {chat_id}")
+        threshold = config.get("new_member_review.mute_score", 97)
+        if not should_mute_new_member(result, threshold):
+            logger.info(
+                "New member profile allowed in chat %s: user_id=%s score=%s",
+                chat_id,
+                user.id,
+                result.score,
+            )
+            stats.record_check("passed")
+            return
+
+        await context.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user.id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+                can_change_info=False,
+                can_invite_users=False,
+                can_pin_messages=False,
+            ),
+        )
+
+        display_name = "".join(
+            part for part in [user.last_name or "", user.first_name or ""] if part
+        ) or user.username or str(user.id)
+        notice = (
+            "⚠️ 已禁言疑似广告账号\n"
+            f"用户：{display_name}\n"
+            f"风险：{result.score}%\n"
+            f"原因：{result.reason or '公开资料存在明确广告引流特征'}"
+        )
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(t("btn_unban"), callback_data=f"unban_{user.id}")
+        ]])
+        sent = await context.bot.send_message(
+            chat_id,
+            notice,
+            reply_markup=reply_markup,
+        )
+        delete_after = config.get(
+            "new_member_review.delete_notice_after_seconds",
+            0,
+        )
+        schedule_message_deletion(
+            context,
+            chat_id,
+            sent.message_id,
+            delete_after,
+            "new member review notice",
+        )
+        stats.record_check("banned")
+        logger.info(
+            "New member muted after profile review: chat_id=%s user_id=%s score=%s",
+            chat_id,
+            user.id,
+            result.score,
+        )
+    except Exception as e:
+        stats.record_check("failed")
+        logger.error(
+            "New member profile review failed open: chat_id=%s user_id=%s error_type=%s",
+            chat_id,
+            user.id,
+            type(e).__name__,
+        )
+
+
+async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """记录真实入群事件，并在后台审核公开资料。"""
+    chat_member = update.chat_member
+    old_status = chat_member.old_chat_member.status
+    new_status = chat_member.new_chat_member.status
+    if not is_new_member_join(old_status, new_status):
+        return
+
+    user = chat_member.new_chat_member.user
+    chat_id = chat_member.chat.id
+    db_user = UserInfo(
+        user_id=user.id,
+        chat_id=chat_id,
+        join_time=datetime.now(),
+        message_count=0,
+        check_count=0,
+        verification_times=0,
+    )
+    db.save_user(db_user)
+    logger.info("New member joined: chat_id=%s user_id=%s", chat_id, user.id)
+
+    if config.get("new_member_review.enabled", False):
+        context.application.create_task(
+            review_new_member(context=context, chat_id=chat_id, user=user),
+            update=update,
+        )
 
 # ============ 广告管理命令 ============
 

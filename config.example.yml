@@ -9,9 +9,10 @@ telegram:
 language: "zh"
 
 # AI 模型选择: openai / qwen / deepseek
-ai_model: "deepseek"
+ai_model: "openai"
 
-# OpenAI 配置
+# OpenAI 配置。生产环境可用 OPENAI_API_KEY / OPENAI_BASE_URL /
+# OPENAI_MODEL 环境变量覆盖，避免把凭据写入配置文件。
 openai:
   api_key: ""
   base_url: "https://api.openai.com/v1"
@@ -36,6 +37,13 @@ strategy:
   spam_score: 80              # 垃圾评分阈值 (0-100)
   verification_times: 1       # 验证通过次数限制（0=不限制，>0=通过N次后不再检测）
   check_message_count: true   # 是否检查发言次数（false=只看加入天数）
+
+# 新成员公开资料审核：加入后不预先限制，只有明确广告资料才禁言。
+new_member_review:
+  enabled: true
+  mute_score: 97
+  timeout_seconds: 20
+  delete_notice_after_seconds: 0
 
 # 消息管理
 message:

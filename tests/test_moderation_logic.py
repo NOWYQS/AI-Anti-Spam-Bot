@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import moderation_logic
 from moderation_logic import RuntimeStats, should_check_user
 
 
@@ -66,6 +67,23 @@ def test_should_check_user_ignores_message_threshold_when_disabled():
     }
 
     assert should_check_user(user, strategy, now=datetime(2026, 1, 2, 12, 0, 0))
+
+
+def test_is_new_member_join_only_accepts_non_member_to_member_transition():
+    assert moderation_logic.is_new_member_join("left", "member") is True
+    assert moderation_logic.is_new_member_join("kicked", "member") is True
+    assert moderation_logic.is_new_member_join("member", "member") is False
+    assert moderation_logic.is_new_member_join("restricted", "member") is False
+
+
+def test_should_mute_new_member_requires_spam_and_threshold():
+    clear_spam = SimpleNamespace(is_spam=True, score=98)
+    uncertain = SimpleNamespace(is_spam=True, score=96)
+    contradictory = SimpleNamespace(is_spam=False, score=100)
+
+    assert moderation_logic.should_mute_new_member(clear_spam, 97) is True
+    assert moderation_logic.should_mute_new_member(uncertain, 97) is False
+    assert moderation_logic.should_mute_new_member(contradictory, 97) is False
 
 
 def test_runtime_stats_tracks_counts_and_uptime():

@@ -33,6 +33,16 @@ class RuntimeStats:
         }
 
 
+def is_new_member_join(old_status: str, new_status: str) -> bool:
+    """Return true only for a real left/banned to member transition."""
+    return old_status in {"left", "kicked"} and new_status == "member"
+
+
+def should_mute_new_member(result, score_threshold: int) -> bool:
+    """Only mute profiles explicitly classified as spam above the threshold."""
+    return bool(result.is_spam and result.score >= score_threshold)
+
+
 def should_check_user(user, strategy: dict, *, now: datetime | None = None) -> bool:
     """根据策略判断用户是否需要检测。"""
     now = now or datetime.now()
