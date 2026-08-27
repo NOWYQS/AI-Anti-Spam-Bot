@@ -43,6 +43,7 @@ new_member_review:
   enabled: true
   mute_score: 97
   timeout_seconds: 20
+  fetch_avatar: true
   delete_notice_after_seconds: 0
 
 # 消息管理
