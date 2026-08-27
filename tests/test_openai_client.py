@@ -89,6 +89,54 @@ def test_parse_result_returns_safe_fallback_on_invalid_json(monkeypatch):
     assert result.score == 0
 
 
+def test_parse_result_does_not_log_raw_model_content(monkeypatch):
+    module = load_openai_client_module(monkeypatch)
+    warnings = []
+
+    class FakeAsyncOpenAI:
+        def __init__(self, api_key, base_url):
+            self.chat = SimpleNamespace(completions=None)
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setattr(
+        module,
+        "logger",
+        SimpleNamespace(warning=lambda message, *args: warnings.append(message % args)),
+    )
+    client = module.OpenAIClient("k", "https://example.com/v1", "gpt-test")
+
+    client._parse_result("PRIVATE_PROFILE_CONTENT")
+
+    assert warnings
+    assert "PRIVATE_PROFILE_CONTENT" not in warnings[0]
+
+
+def test_check_profile_uses_untrusted_structured_profile(monkeypatch):
+    module = load_openai_client_module(monkeypatch)
+    seen_messages = []
+
+    async def fake_call_with_retry(messages):
+        seen_messages.extend(messages)
+        return '{"state": 1, "spam_score": 99, "spam_reason": "profile ad", "spam_mock_text": ""}'
+
+    class FakeAsyncOpenAI:
+        def __init__(self, api_key, base_url):
+            self.chat = SimpleNamespace(completions=None)
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeAsyncOpenAI)
+    client = module.OpenAIClient("k", "https://example.com/v1", "gpt-test")
+    monkeypatch.setattr(client, "_call_with_retry", fake_call_with_retry)
+
+    profile = '{"first_name":"加我返佣","username":"promo123","is_bot":false}'
+    result = asyncio.run(client.check_profile(profile))
+
+    assert result.is_spam is True
+    assert result.score == 99
+    assert seen_messages[0]["role"] == "system"
+    assert "不可信" in seen_messages[0]["content"]
+    assert profile in seen_messages[1]["content"]
+
+
 def test_check_image_uses_multimodal_payload(monkeypatch):
     module = load_openai_client_module(monkeypatch)
     seen_messages = []

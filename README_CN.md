@@ -35,6 +35,7 @@
 ## ✨ 特性
 
 - 🛡️ **智能检测**：使用 AI 识别文字、图片、贴纸中的垃圾广告
+- 👤 **入群资料审核**：监听真实入群状态，基于姓名和 username 审核；正常用户无感，只有明确广告账号才禁言
 - 📝 **可见内容检测**：图片说明文字和引用片段也会参与风控判断
 - 🔁 **回复与转发覆盖**：回复原文和转发可见内容也会进入提取与检测
 - 🎯 **多模型支持**：OpenAI、通义千问、DeepSeek 任选
@@ -146,7 +147,15 @@ strategy:
   spam_score: 80              # 垃圾评分阈值 (0-100)
   verification_times: 1       # 验证通过次数限制
   check_message_count: true   # 是否检查发言次数
+
+new_member_review:
+  enabled: true               # 监听真实入群事件
+  mute_score: 97              # 只有明显广告资料才禁言
+  timeout_seconds: 20         # 超时或失败时不操作
+  delete_notice_after_seconds: 0
 ```
+
+生产部署可通过 `TELEGRAM_TOKEN`、`TELEGRAM_OWNERS`、`OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL` 环境变量注入凭据，避免写入 `config.yml`。
 
 ### 消息清理配置
 

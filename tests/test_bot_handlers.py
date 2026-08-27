@@ -118,6 +118,10 @@ def bot_module(monkeypatch, tmp_path):
         "telegram.owners": ["1"],
         "message.delete_ban_notice_after_seconds": 30,
         "message.delete_welcome_message_after_seconds": 30,
+        "new_member_review.enabled": True,
+        "new_member_review.mute_score": 97,
+        "new_member_review.timeout_seconds": 20,
+        "new_member_review.delete_notice_after_seconds": 0,
     }
 
     monkeypatch.chdir(tmp_path)
@@ -723,3 +727,89 @@ def test_handle_unban_button_logs_warning_when_notice_delete_fails(bot_module, m
 
 async def _async_result(value):
     return value
+
+
+def test_handle_new_member_schedules_review_for_real_join_only(bot_module, monkeypatch):
+    fake_db = FakeDB()
+    monkeypatch.setattr(bot_module, "db", fake_db)
+    scheduled = []
+
+    def create_task(coroutine, update=None):
+        scheduled.append((coroutine, update))
+        coroutine.close()
+
+    user = SimpleNamespace(
+        id=42,
+        first_name="Alice",
+        last_name="",
+        username="alice",
+        is_bot=False,
+        is_premium=False,
+    )
+    join_update = SimpleNamespace(
+        chat_member=SimpleNamespace(
+            old_chat_member=SimpleNamespace(status=bot_module.ChatMember.LEFT),
+            new_chat_member=SimpleNamespace(status=bot_module.ChatMember.MEMBER, user=user),
+            chat=SimpleNamespace(id=100),
+        )
+    )
+    context = SimpleNamespace(application=SimpleNamespace(create_task=create_task))
+
+    asyncio.run(bot_module.handle_new_member(join_update, context))
+
+    assert len(fake_db.saved_users) == 1
+    assert len(scheduled) == 1
+
+    repeat_update = SimpleNamespace(
+        chat_member=SimpleNamespace(
+            old_chat_member=SimpleNamespace(status=bot_module.ChatMember.MEMBER),
+            new_chat_member=SimpleNamespace(status=bot_module.ChatMember.MEMBER, user=user),
+            chat=SimpleNamespace(id=100),
+        )
+    )
+    asyncio.run(bot_module.handle_new_member(repeat_update, context))
+
+    assert len(fake_db.saved_users) == 1
+    assert len(scheduled) == 1
+
+
+def test_review_new_member_mutes_only_clear_profile_ad(bot_module, monkeypatch):
+    seen_profiles = []
+
+    class FakeAI:
+        async def check_profile(self, profile_json):
+            seen_profiles.append(profile_json)
+            return SimpleNamespace(
+                is_spam=True,
+                score=99,
+                reason="昵称和 username 含明确广告招揽",
+                mock_text="",
+            )
+
+    monkeypatch.setattr(bot_module, "ai_client", FakeAI())
+    fake_bot = FakeBot()
+    user = SimpleNamespace(
+        id=123456,
+        first_name="加我返佣",
+        last_name="客服",
+        username="promo_service",
+        is_bot=False,
+        is_premium=False,
+    )
+
+    asyncio.run(
+        bot_module.review_new_member(
+            context=SimpleNamespace(bot=fake_bot),
+            chat_id=100,
+            user=user,
+        )
+    )
+
+    assert len(seen_profiles) == 1
+    assert "123456" not in seen_profiles[0]
+    assert len(fake_bot.restrict_calls) == 1
+    assert fake_bot.restrict_calls[0]["user_id"] == 123456
+    assert len(fake_bot.send_calls) == 1
+    keyboard = fake_bot.send_calls[0][2]["reply_markup"].inline_keyboard
+    assert len(keyboard) == 1
+    assert keyboard[0][0].callback_data == "unban_123456"

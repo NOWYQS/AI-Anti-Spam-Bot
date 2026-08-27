@@ -24,6 +24,11 @@ class BaseAI(ABC):
         pass
 
     @abstractmethod
+    async def check_profile(self, profile_json: str) -> SpamResult:
+        """检测刚加入成员的公开资料"""
+        pass
+
+    @abstractmethod
     async def check_image(self, user_info: str, image_base64: str) -> SpamResult:
         """检测图片消息"""
         pass
