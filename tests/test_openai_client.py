@@ -128,13 +128,15 @@ def test_check_profile_uses_untrusted_structured_profile(monkeypatch):
     monkeypatch.setattr(client, "_call_with_retry", fake_call_with_retry)
 
     profile = '{"first_name":"加我返佣","username":"promo123","is_bot":false}'
-    result = asyncio.run(client.check_profile(profile))
+    avatar = "data:image/jpeg;base64,AAA"
+    result = asyncio.run(client.check_profile(profile, avatar))
 
     assert result.is_spam is True
     assert result.score == 99
     assert seen_messages[0]["role"] == "system"
     assert "不可信" in seen_messages[0]["content"]
-    assert profile in seen_messages[1]["content"]
+    assert profile in seen_messages[1]["content"][0]["text"]
+    assert seen_messages[1]["content"][1]["image_url"]["url"] == avatar
 
 
 def test_check_image_uses_multimodal_payload(monkeypatch):

@@ -34,6 +34,7 @@ class FakeBot:
         self.restrict_calls = []
         self.send_calls = []
         self.files = {}
+        self.profile_photos = []
         self.sent_message_id = 900
 
     async def restrict_chat_member(self, **kwargs):
@@ -46,6 +47,9 @@ class FakeBot:
 
     async def get_file(self, file_id):
         return self.files[file_id]
+
+    async def get_user_profile_photos(self, user_id, limit=1):
+        return SimpleNamespace(photos=self.profile_photos)
 
 
 class FakeDownloadedFile:
@@ -121,6 +125,7 @@ def bot_module(monkeypatch, tmp_path):
         "new_member_review.enabled": True,
         "new_member_review.mute_score": 97,
         "new_member_review.timeout_seconds": 20,
+        "new_member_review.fetch_avatar": True,
         "new_member_review.delete_notice_after_seconds": 0,
     }
 
@@ -773,11 +778,52 @@ def test_handle_new_member_schedules_review_for_real_join_only(bot_module, monke
     assert len(scheduled) == 1
 
 
+def test_review_new_member_includes_largest_first_profile_photo(bot_module, monkeypatch):
+    seen_avatars = []
+
+    class FakeAI:
+        async def check_profile(self, profile_json, avatar_base64=None):
+            seen_avatars.append(avatar_base64)
+            return SimpleNamespace(
+                is_spam=False,
+                score=0,
+                reason="",
+                mock_text="",
+            )
+
+    monkeypatch.setattr(bot_module, "ai_client", FakeAI())
+    fake_bot = FakeBot()
+    fake_bot.profile_photos = [[
+        SimpleNamespace(file_id="small"),
+        SimpleNamespace(file_id="large"),
+    ]]
+    fake_bot.files["large"] = FakeDownloadedFile(b"jpeg-avatar")
+    user = SimpleNamespace(
+        id=55,
+        first_name="Alice",
+        last_name="",
+        username="alice",
+        is_bot=False,
+        is_premium=False,
+    )
+
+    asyncio.run(
+        bot_module.review_new_member(
+            context=SimpleNamespace(bot=fake_bot),
+            chat_id=100,
+            user=user,
+        )
+    )
+
+    assert seen_avatars[0].startswith("data:image/jpeg;base64,")
+    assert fake_bot.restrict_calls == []
+
+
 def test_review_new_member_mutes_only_clear_profile_ad(bot_module, monkeypatch):
     seen_profiles = []
 
     class FakeAI:
-        async def check_profile(self, profile_json):
+        async def check_profile(self, profile_json, avatar_base64=None):
             seen_profiles.append(profile_json)
             return SimpleNamespace(
                 is_spam=True,

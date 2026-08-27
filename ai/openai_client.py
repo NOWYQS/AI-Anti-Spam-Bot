@@ -47,11 +47,21 @@ class OpenAIClient(BaseAI):
         content = await self._call_with_retry([{"role": "user", "content": prompt}])
         return self._parse_result(content)
 
-    async def check_profile(self, profile_json: str) -> SpamResult:
+    async def check_profile(
+        self,
+        profile_json: str,
+        avatar_base64: str | None = None,
+    ) -> SpamResult:
         prompt = PROFILE_PROMPT.format(profile_json=profile_json)
+        user_content = prompt
+        if avatar_base64:
+            user_content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": avatar_base64}},
+            ]
         content = await self._call_with_retry([
             {"role": "system", "content": PROFILE_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ])
         return self._parse_result(content)
 
