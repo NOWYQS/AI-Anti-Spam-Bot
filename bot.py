@@ -450,10 +450,33 @@ async def review_new_member(
         separators=(",", ":"),
     )
 
+    avatar_base64 = None
+    if config.get("new_member_review.fetch_avatar", True):
+        try:
+            profile_photos = await context.bot.get_user_profile_photos(
+                user.id,
+                limit=1,
+            )
+            if profile_photos.photos:
+                largest_photo = profile_photos.photos[0][-1]
+                avatar_file = await context.bot.get_file(largest_photo.file_id)
+                avatar_bytes = await avatar_file.download_as_bytearray()
+                avatar_base64 = (
+                    "data:image/jpeg;base64,"
+                    + base64.b64encode(avatar_bytes).decode("ascii")
+                )
+        except Exception as e:
+            logger.warning(
+                "New member avatar unavailable: chat_id=%s user_id=%s error_type=%s",
+                chat_id,
+                user.id,
+                type(e).__name__,
+            )
+
     try:
         timeout = config.get("new_member_review.timeout_seconds", 20)
         result = await asyncio.wait_for(
-            ai_client.check_profile(profile_json),
+            ai_client.check_profile(profile_json, avatar_base64),
             timeout=timeout,
         )
         threshold = config.get("new_member_review.mute_score", 97)
